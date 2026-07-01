@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">Nonogram Solver Android</string>
+    <string name="autotap_service_description">Allows the Nonogram Solver to automatically tap cells to fill in the puzzle solution.</string>
+</resources>

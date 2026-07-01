@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:padding="16dp"
+    android:background="#FFFFFF">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical">
+
+        <!-- Grid Size Header -->
+        <TextView
+            android:id="@+id/tvGridSize"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Grid Size: --"
+            android:textSize="20sp"
+            android:textStyle="bold"
+            android:layout_marginBottom="4dp" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Review and correct the detected clue numbers.\nEmpty fields were not detected by OCR."
+            android:textSize="13sp"
+            android:textColor="#666666"
+            android:layout_marginBottom="16dp" />
+
+        <!-- Column Clues Section -->
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Column Clues (top → bottom)"
+            android:textSize="16sp"
+            android:textStyle="bold"
+            android:textColor="#1565C0"
+            android:layout_marginBottom="8dp" />
+
+        <LinearLayout
+            android:id="@+id/llColClues"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical" />
+
+        <!-- Divider -->
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:background="#CCCCCC"
+            android:layout_marginTop="16dp"
+            android:layout_marginBottom="16dp" />
+
+        <!-- Row Clues Section -->
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Row Clues (left → right)"
+            android:textSize="16sp"
+            android:textStyle="bold"
+            android:textColor="#1565C0"
+            android:layout_marginBottom="8dp" />
+
+        <LinearLayout
+            android:id="@+id/llRowClues"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical" />
+
+        <!-- Solve Button -->
+        <Button
+            android:id="@+id/btnSolve"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Solve"
+            android:textSize="18sp"
+            android:layout_marginTop="24dp"
+            android:layout_marginBottom="16dp" />
+
+    </LinearLayout>
+</ScrollView>
