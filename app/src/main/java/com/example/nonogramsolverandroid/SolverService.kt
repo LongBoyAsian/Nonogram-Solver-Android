@@ -355,6 +355,13 @@ class SolverService : Service() {
                 onComplete = {
                     serviceScope.launch {
                         Toast.makeText(this@SolverService, "Auto-fill complete!", Toast.LENGTH_SHORT).show()
+                        // Fully dismiss the clue editor and clear state,
+                        // matching the behavior of manual fill completion.
+                        // The Solve button in the FAB stays visible for a new scan.
+                        clueEditorOverlay?.destroy()
+                        clueEditorOverlay = null
+                        lastSolution = null
+                        lastClues = null
                     }
                 }
             )

@@ -7,6 +7,7 @@ import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.text.InputType
 import android.util.TypedValue
+import android.annotation.SuppressLint
 import android.view.*
 import android.widget.*
 
@@ -102,10 +103,11 @@ class ClueEditorOverlay(
             contentLayout.addView(createClueRow("Row ${i + 1}", prefill, rowEdits))
         }
 
-        // Bottom padding
+        // Bottom padding — tall enough so the last clue rows can be scrolled
+        // above the on-screen numpad (~250dp covers most keyboard heights)
         contentLayout.addView(Space(context).apply {
             layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, dp(8).toInt()
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(250).toInt()
             )
         })
 
@@ -277,6 +279,9 @@ class ClueEditorOverlay(
                 layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
             })
 
+            // Peek button — hold to temporarily hide the editor and see the puzzle
+            addView(createPeekButton())
+
             // Minimize button
             addView(TextView(context).apply {
                 text = "─"
@@ -296,6 +301,36 @@ class ClueEditorOverlay(
                 setPadding(dp(8).toInt(), 0, dp(4).toInt(), 0)
                 setOnClickListener { hide() }
             })
+        }
+    }
+
+    /**
+     * Creates a "Peek" button for the header bar.
+     * While the user presses and holds this button, the entire editor panel
+     * becomes invisible so they can see the puzzle clues underneath.
+     * Releasing the button instantly restores the editor.
+     */
+    @SuppressLint("ClickableViewAccessibility")
+    private fun createPeekButton(): TextView {
+        return TextView(context).apply {
+            text = "👁"
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 20f)
+            gravity = Gravity.CENTER
+            setPadding(dp(8).toInt(), 0, dp(8).toInt(), 0)
+
+            setOnTouchListener { _, event ->
+                when (event.action) {
+                    MotionEvent.ACTION_DOWN -> {
+                        rootView?.visibility = View.INVISIBLE
+                        true
+                    }
+                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                        rootView?.visibility = View.VISIBLE
+                        true
+                    }
+                    else -> false
+                }
+            }
         }
     }
 

@@ -264,11 +264,8 @@ class PuzzleProcessor {
         // Try to find a valid grid from the strict pass
         val result1 = findBestSquareGrid(vertLines, horizLines)
 
-        // If we got a good result (larger than 5×5), use it
-        if (result1 != null && result1.size > 5) {
-            Log.d(TAG, "Grid selected (pass 1): ${result1.size}x${result1.size}")
-            return result1
-        }
+        // Always proceed to Pass 2 — internal dividers may be dark gray
+        // and only visible with a relaxed threshold, yielding a larger grid.
 
         // ---- PASS 2: Relaxed threshold (luminance < 130) ----
         // The internal 5-cell dividers may be rendered as dark gray instead of
@@ -351,68 +348,145 @@ class PuzzleProcessor {
      * Finds the best square grid from the given line positions using the
      * square-constraint algorithm.
      *
-     * The RIGHTMOST vertical and BOTTOMMOST horizontal lines are assumed to
-     * be grid borders. Tries all combinations of (left, top) borders and
-     * picks the one with matching internal line counts, best squareness,
-     * and largest valid size (5..25).
+     * Tries all combinations of (left, right) vertical borders and
+     * (top, bottom) horizontal borders, counts internal lines between them,
+     * and picks the largest valid size (5..25) with reasonable squareness.
+     *
+     * Key improvement: larger grids are ALWAYS preferred over smaller ones
+     * as long as squareness is within tolerance, because real nonograms
+     * are almost never 5×5 when a 10×10 or 15×15 interpretation exists.
+     * Internal line spacing is also validated for uniformity.
      */
     private fun findBestSquareGrid(
         vertLines: List<Int>, horizLines: List<Int>
     ): GridDetectionResult? {
         if (vertLines.size < 2 || horizLines.size < 2) return null
 
-        val gridRight  = vertLines.last()
-        val gridBottom = horizLines.last()
+        Log.d(TAG, "  findBestSquareGrid: vertLines=$vertLines")
+        Log.d(TAG, "  findBestSquareGrid: horizLines=$horizLines")
 
-        var bestSize = 0
-        var bestSquareness = Double.MAX_VALUE
-        var bestLeft = vertLines.first()
-        var bestTop  = horizLines.first()
+        data class Candidate(
+            val size: Int,
+            val squareness: Double,
+            val left: Int, val top: Int,
+            val right: Int, val bottom: Int
+        )
 
+        val candidates = mutableListOf<Candidate>()
+
+        // Try all combinations of (leftBorder, rightBorder) x (topBorder, bottomBorder)
+        // This avoids the assumption that the LAST line is always the border,
+        // which can fail if there are spurious dark lines beyond the grid.
         for (leftIdx in vertLines.indices) {
-            val candidateLeft = vertLines[leftIdx]
-            val width = gridRight - candidateLeft
-            if (width <= 0) continue
+            for (rightIdx in leftIdx + 1 until vertLines.size) {
+                val candidateLeft = vertLines[leftIdx]
+                val candidateRight = vertLines[rightIdx]
+                val width = candidateRight - candidateLeft
+                if (width <= 0) continue
 
-            val internalVert = vertLines.size - leftIdx - 2
-            if (internalVert < 0) continue
+                // Count internal vertical lines between left and right borders
+                val internalVertLines = mutableListOf<Int>()
+                for (k in leftIdx + 1 until rightIdx) {
+                    internalVertLines.add(vertLines[k])
+                }
+                val internalVert = internalVertLines.size
 
-            for (topIdx in horizLines.indices) {
-                val candidateTop = horizLines[topIdx]
-                val height = gridBottom - candidateTop
-                if (height <= 0) continue
+                for (topIdx in horizLines.indices) {
+                    for (bottomIdx in topIdx + 1 until horizLines.size) {
+                        val candidateTop = horizLines[topIdx]
+                        val candidateBottom = horizLines[bottomIdx]
+                        val height = candidateBottom - candidateTop
+                        if (height <= 0) continue
 
-                val internalHoriz = horizLines.size - topIdx - 2
-                if (internalHoriz < 0) continue
+                        // Count internal horizontal lines between top and bottom borders
+                        val internalHorizLines = mutableListOf<Int>()
+                        for (k in topIdx + 1 until bottomIdx) {
+                            internalHorizLines.add(horizLines[k])
+                        }
+                        val internalHoriz = internalHorizLines.size
 
-                if (internalVert != internalHoriz) continue
+                        // Internal line counts must match (square grid)
+                        if (internalVert != internalHoriz) continue
 
-                val size = (internalVert + 1) * 5
-                if (size !in 5..25) continue
+                        val size = (internalVert + 1) * 5
+                        if (size !in 5..25) continue
 
-                val ratio = width.toDouble() / height.toDouble()
-                val squareness = kotlin.math.abs(ratio - 1.0)
+                        val ratio = width.toDouble() / height.toDouble()
+                        val squareness = kotlin.math.abs(ratio - 1.0)
 
-                if (squareness > 0.25) continue
+                        // Reject if aspect ratio is too far from square
+                        if (squareness > 0.25) continue
 
-                if (squareness < bestSquareness - 0.02 ||
-                    (squareness < bestSquareness + 0.02 && size > bestSize)) {
-                    bestSize = size
-                    bestSquareness = squareness
-                    bestLeft = candidateLeft
-                    bestTop = candidateTop
+                        // Validate internal line spacing is roughly uniform
+                        // (real grid dividers are evenly spaced every 5 cells)
+                        if (internalVert > 0 && !isSpacingUniform(
+                                candidateLeft, candidateRight, internalVertLines, 0.30
+                            )) continue
+                        if (internalHoriz > 0 && !isSpacingUniform(
+                                candidateTop, candidateBottom, internalHorizLines, 0.30
+                            )) continue
+
+                        candidates.add(Candidate(
+                            size, squareness,
+                            candidateLeft, candidateTop,
+                            candidateRight, candidateBottom
+                        ))
+                    }
                 }
             }
         }
 
-        if (bestSize < 5) return null
+        if (candidates.isEmpty()) return null
 
-        Log.d(TAG, "  → ${bestSize}x$bestSize, squareness=${"%,.3f".format(bestSquareness)}, bounds=[$bestLeft,$bestTop,$gridRight,$gridBottom]")
+        // Log all candidates for debugging
+        for (c in candidates) {
+            Log.d(TAG, "  candidate: ${c.size}x${c.size}, squareness=${"%.3f".format(c.squareness)}, bounds=[${c.left},${c.top},${c.right},${c.bottom}]")
+        }
+
+        // Selection: STRONGLY prefer larger grids.
+        // Among same-size candidates, prefer better squareness.
+        val best = candidates.sortedWith(
+            compareByDescending<Candidate> { it.size }
+                .thenBy { it.squareness }
+        ).first()
+
+        Log.d(TAG, "  → selected: ${best.size}x${best.size}, squareness=${"%.3f".format(best.squareness)}, bounds=[${best.left},${best.top},${best.right},${best.bottom}]")
 
         return GridDetectionResult(
-            bounds = Rect(bestLeft + 1, bestTop + 1, gridRight - 1, gridBottom - 1),
-            size = bestSize
+            bounds = Rect(best.left + 1, best.top + 1, best.right - 1, best.bottom - 1),
+            size = best.size
         )
+    }
+
+    /**
+     * Checks that internal divider lines are roughly uniformly spaced.
+     * For a real nonogram grid, the thick dividers should be evenly spaced
+     * (every 5 cells). This filters out false positives where random dark
+     * UI elements create a symmetric line count but irregular spacing.
+     *
+     * @param borderStart Position of the starting border (left or top)
+     * @param borderEnd Position of the ending border (right or bottom)
+     * @param internalLines Positions of internal divider lines
+     * @param tolerance Maximum allowed deviation from ideal spacing (fraction, e.g. 0.30 = 30%)
+     */
+    private fun isSpacingUniform(
+        borderStart: Int, borderEnd: Int,
+        internalLines: List<Int>, tolerance: Double
+    ): Boolean {
+        val totalSpan = borderEnd - borderStart
+        val numSections = internalLines.size + 1
+        val idealSpacing = totalSpan.toDouble() / numSections
+
+        // Check each section
+        val allPositions = listOf(borderStart) + internalLines + listOf(borderEnd)
+        for (i in 1 until allPositions.size) {
+            val gap = allPositions[i] - allPositions[i - 1]
+            val deviation = kotlin.math.abs(gap - idealSpacing) / idealSpacing
+            if (deviation > tolerance) {
+                return false
+            }
+        }
+        return true
     }
 
     /**
