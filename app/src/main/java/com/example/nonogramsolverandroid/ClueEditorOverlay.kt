@@ -9,6 +9,8 @@ import android.text.InputType
 import android.util.TypedValue
 import android.annotation.SuppressLint
 import android.view.*
+import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputMethodManager
 import android.widget.*
 
 /**
@@ -33,6 +35,17 @@ class ClueEditorOverlay(
     private var minimizedTabView: View? = null
     private val colEdits = mutableListOf<EditText>()
     private val rowEdits = mutableListOf<EditText>()
+    private val clueRowLayouts = mutableListOf<LinearLayout>()
+    private var scrollView: ScrollView? = null
+    private var bottomSpacer: Space? = null
+    /** The EditText that last held focus — used to restore keyboard after peek/minimize. */
+    private var lastFocusedEdit: EditText? = null
+    /** Whether an EditText currently has focus. */
+    private var hasEditFocus = false
+    /** Snapshot of whether the keyboard was up at the moment of peek/minimize. */
+    private var wasKeyboardUp = false
+    /** Combined ordered list of all EditTexts (columns first, then rows). */
+    private val allEdits: List<EditText> get() = colEdits + rowEdits
 
     /** Called with parsed (rowClues, colClues) when the user taps Solve. */
     var onSolve: ((rowClues: List<List<Int>>, colClues: List<List<Int>>) -> Unit)? = null
@@ -45,6 +58,7 @@ class ClueEditorOverlay(
 
         colEdits.clear()
         rowEdits.clear()
+        clueRowLayouts.clear()
 
         // Root view — intercepts BACK key
         val root = BackAwareLayout(context).apply {
@@ -71,13 +85,14 @@ class ClueEditorOverlay(
         mainLayout.addView(createHeader(gridSize))
 
         // ---- Scrollable clue editors ----
-        val scrollView = ScrollView(context).apply {
+        val sv = ScrollView(context).apply {
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 0, 1f // take remaining space
             )
             setPadding(dp(12).toInt(), 0, dp(12).toInt(), 0)
         }
+        scrollView = sv
 
         val contentLayout = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
@@ -104,15 +119,18 @@ class ClueEditorOverlay(
         }
 
         // Bottom padding — tall enough so the last clue rows can be scrolled
-        // above the on-screen numpad (~250dp covers most keyboard heights)
-        contentLayout.addView(Space(context).apply {
+        // above the on-screen numpad (~250dp covers most keyboard heights).
+        val spacer = Space(context).apply {
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, dp(250).toInt()
             )
-        })
+            visibility = View.VISIBLE
+        }
+        bottomSpacer = spacer
+        contentLayout.addView(spacer)
 
-        scrollView.addView(contentLayout)
-        mainLayout.addView(scrollView)
+        sv.addView(contentLayout)
+        mainLayout.addView(sv)
 
         // ---- Button bar ----
         mainLayout.addView(createButtonBar())
@@ -132,10 +150,13 @@ class ClueEditorOverlay(
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.BOTTOM
-            softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_PAN
+            softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING
         }
 
         windowManager.addView(root, params)
+
+        // Wire up Enter-key navigation, green highlighting, and focus tracking
+        setupEnterKeyNavigation()
     }
 
     /**
@@ -152,6 +173,12 @@ class ClueEditorOverlay(
         removeMinimizedTab()
         colEdits.clear()
         rowEdits.clear()
+        clueRowLayouts.clear()
+        scrollView = null
+        bottomSpacer = null
+        lastFocusedEdit = null
+        hasEditFocus = false
+        wasKeyboardUp = false
     }
 
     /**
@@ -169,6 +196,8 @@ class ClueEditorOverlay(
      * The main panel is hidden but NOT destroyed — EditText values are preserved.
      */
     fun minimize() {
+        wasKeyboardUp = isKeyboardActive()
+        hideKeyboard()
         rootView?.visibility = View.GONE
         showMinimizedTab()
     }
@@ -180,6 +209,10 @@ class ClueEditorOverlay(
     fun restore() {
         removeMinimizedTab()
         rootView?.visibility = View.VISIBLE
+        if (wasKeyboardUp) {
+            restoreKeyboard()
+        }
+        wasKeyboardUp = false
     }
 
     fun unhide() {
@@ -307,13 +340,16 @@ class ClueEditorOverlay(
     /**
      * Creates a "Peek" button for the header bar.
      * While the user presses and holds this button, the entire editor panel
-     * becomes invisible so they can see the puzzle clues underneath.
+     * becomes fully transparent so they can see the puzzle clues underneath.
      * Releasing the button instantly restores the editor.
+     *
+     * Uses window alpha (0f / 1f) instead of View.INVISIBLE so the window
+     * remains in the touch-target tree and ACTION_UP is still delivered.
      */
     @SuppressLint("ClickableViewAccessibility")
     private fun createPeekButton(): TextView {
         return TextView(context).apply {
-            text = "👁"
+            text = "\uD83D\uDC41" // 👁
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 20f)
             gravity = Gravity.CENTER
             setPadding(dp(8).toInt(), 0, dp(8).toInt(), 0)
@@ -321,17 +357,36 @@ class ClueEditorOverlay(
             setOnTouchListener { _, event ->
                 when (event.action) {
                     MotionEvent.ACTION_DOWN -> {
-                        rootView?.visibility = View.INVISIBLE
+                        wasKeyboardUp = isKeyboardActive()
+                        hideKeyboard()
+                        setOverlayAlpha(0f)
                         true
                     }
                     MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                        rootView?.visibility = View.VISIBLE
+                        setOverlayAlpha(1f)
+                        if (wasKeyboardUp) {
+                            restoreKeyboard()
+                        }
+                        wasKeyboardUp = false
                         true
                     }
                     else -> false
                 }
             }
         }
+    }
+
+    /**
+     * Sets the overlay window's alpha without removing it from the
+     * window manager, so touch events continue to be delivered.
+     */
+    private fun setOverlayAlpha(alpha: Float) {
+        val root = rootView ?: return
+        try {
+            val lp = root.layoutParams as WindowManager.LayoutParams
+            lp.alpha = alpha
+            windowManager.updateViewLayout(root, lp)
+        } catch (_: Exception) { }
     }
 
     private fun createSectionLabel(text: String): TextView {
@@ -349,13 +404,19 @@ class ClueEditorOverlay(
         prefill: String,
         editList: MutableList<EditText>
     ): LinearLayout {
-        return LinearLayout(context).apply {
+        val row = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
             ).apply { bottomMargin = dp(3).toInt() }
+            // Rounded background so green highlight looks clean
+            background = GradientDrawable().apply {
+                setColor(Color.TRANSPARENT)
+                cornerRadius = dp(4f)
+            }
+            setPadding(dp(2).toInt(), dp(2).toInt(), dp(2).toInt(), dp(2).toInt())
 
             // Label
             addView(TextView(context).apply {
@@ -370,6 +431,7 @@ class ClueEditorOverlay(
             val edit = EditText(context).apply {
                 setText(prefill)
                 inputType = InputType.TYPE_CLASS_PHONE
+                imeOptions = EditorInfo.IME_ACTION_NEXT
                 hint = "e.g. 2 1 3"
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
                 setTextColor(Color.parseColor("#333333"))
@@ -387,6 +449,8 @@ class ClueEditorOverlay(
             addView(edit)
             editList.add(edit)
         }
+        clueRowLayouts.add(row)
+        return row
     }
 
     private fun createDivider(): View {
@@ -453,7 +517,7 @@ class ClueEditorOverlay(
         val finalRowClues = rowClues.map { it.ifEmpty { listOf(0) } }
         val finalColClues = colClues.map { it.ifEmpty { listOf(0) } }
 
-        hide()
+        minimize()
         onSolve?.invoke(finalRowClues, finalColClues)
     }
 
@@ -465,11 +529,141 @@ class ClueEditorOverlay(
     }
 
     // -----------------------------------------------------------------------
+    // Enter-key navigation + green highlighting
+    // -----------------------------------------------------------------------
+
+    /**
+     * Wires up every EditText so that pressing Enter/Return:
+     *  1. Highlights the current row's background green (confirmed).
+     *  2. Moves focus to the next EditText in the list.
+     *  3. Places the cursor at the END of the next field's text.
+     */
+    private fun setupEnterKeyNavigation() {
+        val all = allEdits
+        for (i in all.indices) {
+            val edit = all[i]
+
+            // Track focus for keyboard restore after peek/minimize
+            edit.setOnFocusChangeListener { _, hasFocus ->
+                if (hasFocus) {
+                    lastFocusedEdit = edit
+                    hasEditFocus = true
+                } else {
+                    // Post to check if *another* EditText grabbed focus;
+                    // if not, no EditText has focus anymore.
+                    edit.post {
+                        val currentFocus = rootView?.findFocus()
+                        if (currentFocus !is EditText) {
+                            hasEditFocus = false
+                        }
+                    }
+                }
+            }
+
+            // Use OnKeyListener for hardware / phone-pad Return key
+            edit.setOnKeyListener { _, keyCode, event ->
+                if (keyCode == KeyEvent.KEYCODE_ENTER && event.action == KeyEvent.ACTION_UP) {
+                    advanceFromIndex(i)
+                    true
+                } else {
+                    false
+                }
+            }
+
+            // Also handle IME action (soft keyboard "Next" / "Done")
+            edit.setOnEditorActionListener { _, actionId, _ ->
+                if (actionId == EditorInfo.IME_ACTION_NEXT ||
+                    actionId == EditorInfo.IME_ACTION_DONE
+                ) {
+                    advanceFromIndex(i)
+                    true
+                } else {
+                    false
+                }
+            }
+        }
+    }
+
+    /**
+     * Marks the row at [index] green and moves focus to the next EditText.
+     */
+    private fun advanceFromIndex(index: Int) {
+        // Highlight current row green
+        if (index in clueRowLayouts.indices) {
+            (clueRowLayouts[index].background as? GradientDrawable)
+                ?.setColor(Color.parseColor("#C8E6C9"))
+        }
+
+        // Move to the next EditText, if any
+        val all = allEdits
+        val nextIndex = index + 1
+        if (nextIndex in all.indices) {
+            val nextEdit = all[nextIndex]
+            nextEdit.requestFocus()
+            nextEdit.setSelection(nextEdit.text.length) // cursor at end
+
+            // Scroll so 1-2 previous clue rows are visible above the focused one.
+            // We find the row 2 positions back and scroll so it sits at the top
+            // of the ScrollView, which places the focused row a couple lines down.
+            scrollView?.let { sv ->
+                nextEdit.post {
+                    val anchorIndex = (nextIndex - 2).coerceAtLeast(0)
+                    val anchorView = clueRowLayouts.getOrNull(anchorIndex) ?: return@post
+
+                    val anchorLocation = IntArray(2)
+                    val svLocation = IntArray(2)
+                    anchorView.getLocationInWindow(anchorLocation)
+                    sv.getLocationInWindow(svLocation)
+
+                    val anchorTopInSv = anchorLocation[1] - svLocation[1] + sv.scrollY
+                    val targetScroll = (anchorTopInSv - dp(4).toInt()).coerceAtLeast(0)
+                    sv.smoothScrollTo(0, targetScroll)
+                }
+            }
+        } else {
+            // Last EditText — dismiss the keyboard and clear focus so the
+            // user can immediately tap the Solve button.
+            hideKeyboard()
+            allEdits.lastOrNull()?.clearFocus()
+        }
+    }
+
+    // -----------------------------------------------------------------------
     // Utilities
     // -----------------------------------------------------------------------
 
     private fun dp(value: Int): Float = value * context.resources.displayMetrics.density
     private fun dp(value: Float): Float = value * context.resources.displayMetrics.density
+
+    /** Hides the soft keyboard if it is currently showing. */
+    private fun hideKeyboard() {
+        val focusedView = rootView?.findFocus() ?: return
+        val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+        imm?.hideSoftInputFromWindow(focusedView.windowToken, 0)
+    }
+
+    /**
+     * Returns true if the InputMethodManager reports an active input
+     * connection, which is a reliable signal that the soft keyboard is showing.
+     */
+    private fun isKeyboardActive(): Boolean {
+        val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+        return imm?.isActive(rootView?.findFocus()) == true
+    }
+
+    /**
+     * Re-shows the soft keyboard for the last-focused EditText.
+     * Called when restoring from peek or minimize only if the keyboard
+     * was confirmed to be active at the moment of the peek/minimize action.
+     */
+    private fun restoreKeyboard() {
+        val editToRestore = lastFocusedEdit ?: return
+        rootView?.postDelayed({
+            editToRestore.requestFocus()
+            val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+            imm?.showSoftInput(editToRestore, InputMethodManager.SHOW_IMPLICIT)
+        }, 200)
+    }
 
     /**
      * FrameLayout that intercepts BACK key presses so the user can

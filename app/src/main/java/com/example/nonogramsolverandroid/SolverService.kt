@@ -81,6 +81,26 @@ class SolverService : Service() {
                     virtualDisplay?.release()
                     virtualDisplay = null
                     mediaProjection = null
+                    // MediaProjection was revoked (e.g. screen turned off).
+                    // Clean up all UI and stop the service so the user doesn't
+                    // see a stale Solve button that can't capture the screen.
+                    serviceScope.launch {
+                        clueEditorOverlay?.destroy()
+                        clueEditorOverlay = null
+                        overlayView?.let {
+                            try { windowManager.removeView(it) } catch (_: Exception) { }
+                        }
+                        overlayView = null
+                        fabView?.let {
+                            try { windowManager.removeView(it) } catch (_: Exception) { }
+                        }
+                        fabView = null
+                        fillButton = null
+                        clearButton = null
+                        lastSolution = null
+                        lastClues = null
+                        stopSelf()
+                    }
                 }
             }, null)
 
@@ -248,13 +268,16 @@ class SolverService : Service() {
                     if (solution != null) {
                         lastSolution = solution
                         lastClues = correctedClues
+                        // Solve succeeded — fully remove the editor
+                        clueEditorOverlay?.destroy()
                         showOverlay(solution, correctedClues)
                         Toast.makeText(this@SolverService, "Solved!", Toast.LENGTH_SHORT).show()
                     } else {
                         lastSolution = null
                         lastClues = null
-                        Toast.makeText(this@SolverService, "Solver failed (Invalid clues?)", Toast.LENGTH_LONG).show()
-                        showOverlay(null, correctedClues)
+                        Toast.makeText(this@SolverService, "Solver failed (Invalid clues?) — edit and retry", Toast.LENGTH_LONG).show()
+                        // Restore the editor so the user can fix their clue numbers
+                        clueEditorOverlay?.restore()
                     }
                 }
             }
