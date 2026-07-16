@@ -475,8 +475,12 @@ class SolverService : Service() {
         virtualDisplay?.release()
         mediaProjection?.stop()
         clueEditorOverlay?.destroy()
-        fabView?.let { windowManager.removeView(it) }
-        overlayView?.let { windowManager.removeView(it) }
+        fabView?.let { 
+            try { windowManager.removeView(it) } catch (_: Exception) { } 
+        }
+        overlayView?.let { 
+            try { windowManager.removeView(it) } catch (_: Exception) { } 
+        }
         super.onDestroy()
     }
 
